@@ -57,8 +57,8 @@ Rewrite this into a single, technical API release note.
 def call_gemini_api(prompt, api_key):
     try:
         genai.configure(api_key=api_key)
-        # CORRECTED: Updated the model name to a current, valid identifier.
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # CORRECTED: Updated the model name to be more specific to the Google AI API.
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
