@@ -3,6 +3,8 @@ import pandas as pd
 import google.generativeai as genai
 import openai
 import requests
+from huggingface_hub import InferenceClient
+import pkg_resources # Added for debugging the library version
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -95,12 +97,19 @@ Rewrite this into a single, technical API feature note.
 
 def call_gemini_api(prompt, api_key):
     try:
+        # This will display the EXACT library version in your app to confirm the fix
+        version = pkg_resources.get_distribution("google-generativeai").version
+        st.success(f"Running with google-generativeai version: {version}")
+
         genai.configure(api_key=api_key)
+        # Use the '-latest' tag for the model name
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Error with Gemini API: {e}"
+        st.error(f"An error occurred with the Gemini API:")
+        st.exception(e)
+        return None # Return None on error
 
 def call_openai_api(prompt, api_key):
     try:
@@ -114,19 +123,23 @@ def call_openai_api(prompt, api_key):
         return f"Error with OpenAI API: {e}"
 
 def call_huggingface_api(prompt, api_key, model_id="mistralai/Mistral-7B-Instruct-v0.2"):
+    """
+    Calls the Hugging Face API using the recommended InferenceClient.
+    """
     try:
-        api_url = f"https://api-inference.huggingface.co/models/{model_id}"
-        headers = {"Authorization": f"Bearer {api_key}"}
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json={
-                "inputs": prompt,
-                "parameters": {"return_full_text": False}
-            }
+        # Initialize the client with your API key
+        client = InferenceClient(token=api_key)
+        
+        # Make the API call
+        response = client.text_generation(
+            prompt, 
+            model=model_id,
+            max_new_tokens=256, # Set a reasonable limit for the response length
+            return_full_text=False
         )
-        response.raise_for_status()
-        return response.json()[0]['generated_text']
+        
+        # The client directly returns the generated text string
+        return response
     except Exception as e:
         return f"Error with Hugging Face API: {e}"
 
@@ -231,10 +244,11 @@ def run_generation(note_type, uploader_key, button_key):
                             issue_type_val,
                             data_payload
                         )
-
-                    st.markdown(suggestion, unsafe_allow_html=True)
-                    st.code(f"Original Summary: {data_payload['summary']}\nIssue Type: {issue_type_val}\nComponents: {data_payload['components']}", language="text")
-                    st.divider()
+                    
+                    if suggestion: # Check if the suggestion is not None
+                        st.markdown(suggestion, unsafe_allow_html=True)
+                        st.code(f"Original Summary: {data_payload['summary']}\nIssue Type: {issue_type_val}\nComponents: {data_payload['components']}", language="text")
+                        st.divider()
 
                 progress_bar.progress(1.0, text="Generation complete!")
                 st.success("All notes have been generated successfully!")
