@@ -12,6 +12,7 @@ st.set_page_config(
 )
 
 # --- PROMPT TEMPLATES (Common for all models) ---
+# CORRECTED: Escaped the braces around the example placeholders to prevent a KeyError.
 CORE_PROMPT_TEMPLATE = """
 You are a seasoned technical writer at Alation, a leading data intelligence company. Your task is to rewrite raw, engineer-written notes into a polished, customer-facing release note for a bug fix.
 
@@ -21,7 +22,7 @@ You are a seasoned technical writer at Alation, a leading data intelligence comp
 - Start with a phrase like "Fixed an issue where..." or "Addressed a defect that...".
 - Focus on the user's problem that was solved, not the internal technical details.
 - The output must be a single, complete sentence.
-- Format the final output as: **{key}**: {Polished release note}.
+- Format the final output as: **{key}**: {{Polished release note}}.
 
 **Raw Input:**
 - **Jira Key:** {key}
@@ -32,6 +33,7 @@ You are a seasoned technical writer at Alation, a leading data intelligence comp
 Rewrite this into a single, polished release note.
 """
 
+# CORRECTED: Escaped the braces here as well.
 API_PROMPT_TEMPLATE = """
 You are a technical writer for the developer portal at Alation. Your task is to rewrite raw engineering notes into a clear, direct API change log entry.
 
@@ -41,7 +43,7 @@ You are a technical writer for the developer portal at Alation. Your task is to 
 - If a component is provided, lead with it in bold brackets: **[{component}]**.
 - Clearly state the change: what was added, updated, or deprecated.
 - The output must be a single, complete sentence.
-- Format the final output as: **{key}**: {Polished API note}.
+- Format the final output as: **{key}**: {{Polished API note}}.
 
 **Raw Input:**
 - **Jira Key:** {key}
@@ -74,13 +76,21 @@ def call_openai_api(prompt, api_key):
     except Exception as e:
         return f"Error with OpenAI API: {e}"
 
+# IMPROVED: This function now cleans the Hugging Face response.
 def call_huggingface_api(prompt, api_key, model_id="mistralai/Mistral-7B-Instruct-v0.2"):
     try:
         api_url = f"https://api-inference.huggingface.co/models/{model_id}"
         headers = {"Authorization": f"Bearer {api_key}"}
-        response = requests.post(api_url, headers=headers, json={"inputs": prompt})
+        response = requests.post(
+            api_url, 
+            headers=headers, 
+            json={
+                "inputs": prompt,
+                # Prevents the model from repeating the prompt in the output
+                "parameters": {"return_full_text": False} 
+            }
+        )
         response.raise_for_status()
-        # The response is a list containing a dictionary
         return response.json()[0]['generated_text']
     except Exception as e:
         return f"Error with Hugging Face API: {e}"
@@ -89,13 +99,11 @@ def call_huggingface_api(prompt, api_key, model_id="mistralai/Mistral-7B-Instruc
 def generate_note(model_provider, api_key, note_type, data):
     """Dispatcher function to call the correct API based on user selection."""
     
-    # Select the prompt template
     if note_type == "Core":
         prompt = CORE_PROMPT_TEMPLATE.format(**data)
     else: # API
         prompt = API_PROMPT_TEMPLATE.format(**data)
 
-    # Call the selected LLM's API function
     if model_provider == "Gemini":
         return call_gemini_api(prompt, api_key)
     elif model_provider == "OpenAI":
@@ -147,10 +155,9 @@ def run_generation(note_type, uploader_key, button_key):
                 progress_bar = st.progress(0, text="Starting generation...")
 
                 for index, row in df.iterrows():
-                    progress_text = f"Generating note for {row['Key']}..."
+                    progress_text = f"Generating note for {row.get('Key', 'N/A')}..."
                     progress_bar.progress((index) / len(df), text=progress_text)
                     
-                    # Prepare data payload for the prompt
                     data_payload = {
                         'key': row.get('Key', ""),
                         'summary': row.get('Summary', ""),
