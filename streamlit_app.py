@@ -4,7 +4,7 @@ import google.generativeai as genai
 import openai
 import requests
 from huggingface_hub import InferenceClient
-import pkg_resources # Added for debugging the library version
+from importlib import metadata # Corrected import for version checking
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -97,8 +97,8 @@ Rewrite this into a single, technical API feature note.
 
 def call_gemini_api(prompt, api_key):
     try:
-        # This will display the EXACT library version in your app to confirm the fix
-        version = pkg_resources.get_distribution("google-generativeai").version
+        # This will display the EXACT library version in your app using the modern method
+        version = metadata.version("google-generativeai")
         st.success(f"Running with google-generativeai version: {version}")
 
         genai.configure(api_key=api_key)
