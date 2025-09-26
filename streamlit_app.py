@@ -56,13 +56,12 @@ Rewrite this into a single, technical API release note.
 
 def call_gemini_api(prompt, api_key):
     try:
-        # THE DEFINITIVE FIX: Create an isolated client instance using client_options.
-        # This robust method bypasses any conflicting environment credentials and
-        # ensures only the provided API key is used.
-        model = genai.GenerativeModel(
-            model_name='models/gemini-1.5-flash',
-            client_options={"api_key": api_key}
-        )
+        # THE CORRECT METHOD (from your working app):
+        # First, configure the API key globally.
+        genai.configure(api_key=api_key)
+        
+        # Then, create the model instance. It will automatically use the configured key.
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         response = model.generate_content(prompt)
         return response.text
