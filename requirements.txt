@@ -1,6 +1,6 @@
 streamlit
 pandas
-google-generativeai>=0.5.0
+google-generativeai==0.7.1
 openai
 requests
-huggingface_hub
+huggingface-hub
