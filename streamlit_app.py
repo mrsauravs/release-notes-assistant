@@ -56,8 +56,12 @@ Rewrite this into a single, technical API release note.
 
 def call_gemini_api(prompt, api_key):
     try:
-        genai.configure(api_key=api_key)
-        # CORRECTED: Updated the model name to be more specific to the Google AI API.
+        # CORRECTED: Explicitly set the transport to 'rest' to avoid
+        # auto-discovery of incorrect enterprise (Vertex AI) credentials.
+        genai.configure(
+            api_key=api_key,
+            transport='rest'
+        )
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text
