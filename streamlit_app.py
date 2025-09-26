@@ -12,7 +12,6 @@ st.set_page_config(
 )
 
 # --- PROMPT TEMPLATES (Common for all models) ---
-# CORRECTED: Escaped the braces around the example placeholders to prevent a KeyError.
 CORE_PROMPT_TEMPLATE = """
 You are a seasoned technical writer at Alation, a leading data intelligence company. Your task is to rewrite raw, engineer-written notes into a polished, customer-facing release note for a bug fix.
 
@@ -33,7 +32,6 @@ You are a seasoned technical writer at Alation, a leading data intelligence comp
 Rewrite this into a single, polished release note.
 """
 
-# CORRECTED: Escaped the braces here as well.
 API_PROMPT_TEMPLATE = """
 You are a technical writer for the developer portal at Alation. Your task is to rewrite raw engineering notes into a clear, direct API change log entry.
 
@@ -59,7 +57,8 @@ Rewrite this into a single, technical API release note.
 def call_gemini_api(prompt, api_key):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        # CORRECTED: Updated the model name to a current, valid identifier.
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
@@ -76,18 +75,16 @@ def call_openai_api(prompt, api_key):
     except Exception as e:
         return f"Error with OpenAI API: {e}"
 
-# IMPROVED: This function now cleans the Hugging Face response.
 def call_huggingface_api(prompt, api_key, model_id="mistralai/Mistral-7B-Instruct-v0.2"):
     try:
         api_url = f"https://api-inference.huggingface.co/models/{model_id}"
         headers = {"Authorization": f"Bearer {api_key}"}
         response = requests.post(
-            api_url, 
-            headers=headers, 
+            api_url,
+            headers=headers,
             json={
                 "inputs": prompt,
-                # Prevents the model from repeating the prompt in the output
-                "parameters": {"return_full_text": False} 
+                "parameters": {"return_full_text": False}
             }
         )
         response.raise_for_status()
@@ -98,7 +95,7 @@ def call_huggingface_api(prompt, api_key, model_id="mistralai/Mistral-7B-Instruc
 # --- Main Note Generation Logic ---
 def generate_note(model_provider, api_key, note_type, data):
     """Dispatcher function to call the correct API based on user selection."""
-    
+
     if note_type == "Core":
         prompt = CORE_PROMPT_TEMPLATE.format(**data)
     else: # API
@@ -125,7 +122,7 @@ with st.sidebar:
         ("Gemini", "OpenAI", "Hugging Face")
     )
     api_key = st.text_input(f"Enter your {model_provider} API Key", type="password")
-    
+
     st.info(
         "**Where to find your API Key:**\n"
         "- **Gemini:** [Google AI Studio](https://aistudio.google.com/)\n"
@@ -157,7 +154,7 @@ def run_generation(note_type, uploader_key, button_key):
                 for index, row in df.iterrows():
                     progress_text = f"Generating note for {row.get('Key', 'N/A')}..."
                     progress_bar.progress((index) / len(df), text=progress_text)
-                    
+
                     data_payload = {
                         'key': row.get('Key', ""),
                         'summary': row.get('Summary', ""),
@@ -165,14 +162,14 @@ def run_generation(note_type, uploader_key, button_key):
                         'raw_notes': row.get('Release Notes', ""),
                         'component': row.get('Component', "")
                     }
-                    
+
                     with st.spinner(progress_text):
                         suggestion = generate_note(model_provider, api_key, note_type, data_payload)
-                    
+
                     st.markdown(suggestion)
                     st.code(f"Original Summary: {data_payload['summary']}\nComponent: {data_payload['component']}", language="text")
                     st.divider()
-                
+
                 progress_bar.progress(1.0, text="Generation complete!")
                 st.success("All notes have been generated successfully!")
 
