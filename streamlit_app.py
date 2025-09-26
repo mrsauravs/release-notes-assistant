@@ -56,13 +56,14 @@ Rewrite this into a single, technical API release note.
 
 def call_gemini_api(prompt, api_key):
     try:
-        # CORRECTED: Explicitly set the transport to 'rest' to avoid
-        # auto-discovery of incorrect enterprise (Vertex AI) credentials.
-        genai.configure(
-            api_key=api_key,
-            transport='rest'
+        # THE DEFINITIVE FIX: Create an isolated client instance using client_options.
+        # This robust method bypasses any conflicting environment credentials and
+        # ensures only the provided API key is used.
+        model = genai.GenerativeModel(
+            model_name='models/gemini-1.5-flash',
+            client_options={"api_key": api_key}
         )
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
