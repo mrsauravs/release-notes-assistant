@@ -133,9 +133,12 @@ def call_huggingface_api(prompt, api_key, model_id="mistralai/Mistral-7B-Instruc
 # --- Main Note Generation Logic ---
 def generate_note(model_provider, api_key, note_type, issue_type, data):
     """Dispatcher function to select the right prompt and call the correct API."""
+
+    # Define the keywords that identify a bug fix
+    bug_fix_keywords = ['bug', 'support escalation']
     
-    # Determine if the issue is a bug or a feature
-    is_bug = 'bug' in issue_type.lower()
+    # Check if any of the keywords are in the issue_type string (case-insensitive)
+    is_bug = any(keyword in issue_type.lower() for keyword in bug_fix_keywords)
 
     # Select the correct prompt template based on note type and issue type
     if note_type == "Core":
