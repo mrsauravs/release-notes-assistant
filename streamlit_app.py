@@ -134,13 +134,9 @@ def call_huggingface_api(prompt, api_key, model_id="mistralai/Mistral-7B-Instruc
 def generate_note(model_provider, api_key, note_type, issue_type, data):
     """Dispatcher function to select the right prompt and call the correct API."""
 
-    # Define the keywords that identify a bug fix
     bug_fix_keywords = ['bug', 'support escalation']
-    
-    # Check if any of the keywords are in the issue_type string (case-insensitive)
     is_bug = any(keyword in issue_type.lower() for keyword in bug_fix_keywords)
 
-    # Select the correct prompt template based on note type and issue type
     if note_type == "Core":
         prompt_template = CORE_BUG_PROMPT_TEMPLATE if is_bug else CORE_FEATURE_PROMPT_TEMPLATE
     else:  # API
@@ -148,7 +144,6 @@ def generate_note(model_provider, api_key, note_type, issue_type, data):
     
     prompt = prompt_template.format(**data)
 
-    # Call the selected LLM's API function
     if model_provider == "Gemini":
         return call_gemini_api(prompt, api_key)
     elif model_provider == "OpenAI":
@@ -198,28 +193,34 @@ def run_generation(note_type, uploader_key, button_key):
                 return
 
             try:
-                df = pd.read_csv(uploaded_file)
-                # Check for required columns
-                required_cols = ['Issue Type', 'Key', 'Summary']
-                if not all(col in df.columns for col in required_cols):
-                    st.error(f"CSV is missing one or more required columns: {', '.join(required_cols)}")
-                    return
-
+                # Read the CSV and convert 'Release Notes' to string to handle empty cells
+                df = pd.read_csv(uploaded_file, dtype={"Release Notes": str})
+                df['Release Notes'] = df['Release Notes'].fillna('') # Ensure NaN becomes empty string
+                
                 st.subheader("🤖 AI-Generated Suggestions")
                 progress_bar = st.progress(0, text="Starting generation...")
 
-                for index, row in df.iterrows():
-                    issue_type_val = row.get('Issue Type', 'Feature') # Default to feature if blank
+                # Define texts that indicate a row should be skipped
+                skip_texts = ['internal only', 'na']
+                skipped_rows_count = 0
+                
+                # Create a filtered dataframe of rows to be processed
+                process_df = df[~df['Release Notes'].str.strip().str.lower().isin(skip_texts) & (df['Release Notes'].str.strip() != '')]
+                skipped_rows_count = len(df) - len(process_df)
+                
+                # Loop through only the rows that need processing
+                for index, row in process_df.iterrows():
+                    issue_type_val = row.get('Issue Type', 'Feature')
                     progress_text = f"Generating note for {row.get('Key', 'N/A')} ({issue_type_val})..."
-                    progress_bar.progress((index) / len(df), text=progress_text)
+                    current_progress = (index + 1) / len(df)
+                    progress_bar.progress(current_progress, text=progress_text)
 
-                    # Use the correct column names as specified by the user
                     data_payload = {
                         'key': row.get('Key', ""),
                         'summary': row.get('Summary', ""),
                         'description': row.get('Description', ""),
                         'raw_notes': row.get('Release Notes', ""),
-                        'components': row.get('Components', "") # Corrected to 'Components'
+                        'components': row.get('Components', "")
                     }
 
                     with st.spinner(progress_text):
@@ -237,6 +238,9 @@ def run_generation(note_type, uploader_key, button_key):
 
                 progress_bar.progress(1.0, text="Generation complete!")
                 st.success("All notes have been generated successfully!")
+                
+                if skipped_rows_count > 0:
+                    st.info(f"💡 Skipped {skipped_rows_count} row(s) because their 'Release Notes' column was empty or marked for internal use only.")
 
             except Exception as e:
                 st.error(f"An error occurred during file processing: {e}")
