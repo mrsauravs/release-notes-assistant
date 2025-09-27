@@ -42,7 +42,7 @@ def find_column_by_substring(df, substring):
     return None
 
 def build_classifier_prompt(engineering_note):
-    """Builds a prompt to classify a note as PUBLIC or INTERNAL."""
+    """Builds a more sophisticated prompt to classify a note as PUBLIC or INTERNAL."""
     triage_data = {
         "Summary": engineering_note.get("Summary", ""),
         "Issue Type": engineering_note.get("Issue Type", ""),
@@ -50,22 +50,24 @@ def build_classifier_prompt(engineering_note):
     }
     
     return f"""
-    You are an expert Release Manager at an enterprise software company. Analyze the following engineering ticket data to determine if it describes a customer-facing change or an internal-only task.
+    You are a meticulous Principal Release Manager. Your primary goal is to shield customers from internal engineering details. You must be skeptical and default to INTERNAL unless a change is clearly and directly customer-facing.
 
-    - **PUBLIC** changes are new features, enhancements, or bug fixes that a customer would notice or benefit from. They affect the user interface, functionality, performance, or API. Examples: "Ability to Filter by ‘No Steward’", "Improve Search Performance".
-    - **INTERNAL** changes are tasks like refactoring code, updating internal libraries, database migrations, or fixing unit tests with no direct, observable impact on the customer. Examples: "Fix the Unit Test Failures in Master Branch", "Refactor backend authentication service".
+    **CRITICAL RULE: Direct vs. Indirect Benefit**
+    If a change provides an *indirect* benefit (e.g., improves security, increases performance, makes future development easier) but does NOT introduce a new, tangible feature, UI change, or bug fix that a user can directly observe, you MUST classify it as **INTERNAL**.
 
-    Look for clues:
-    - User-facing benefits in the summary/description suggest PUBLIC.
-    - Terms like 'refactor', 'tech debt', 'internal testing', 'update dependency', 'unit test' suggest INTERNAL.
-    - 'Bug', 'Story', 'Enhancement' are usually PUBLIC. 'Task', 'Spike', 'Sub-task' are usually INTERNAL.
+    **Analyze the ticket data based on these rules:**
+    - **PUBLIC:** A new button, a new filter option, a visible performance boost, a fixed bug, support for a new data source. The benefit is direct and obvious to the user.
+    - **INTERNAL:** A code refactor, updating a dependency or library, fixing a unit test, migrating a build pipeline, a backend change with no noticeable user-facing effect.
 
-    **Ticket Data:**
+    **Clue Keywords for INTERNAL:**
+    - refactor, pipeline, unit test, migration, tech debt, infrastructure, dependency, cleanup, certificate update
+
+    **Ticket Data to Classify:**
     ```json
     {json.dumps(triage_data, indent=2)}
     ```
 
-    Is this change PUBLIC or INTERNAL? Your response must be a single word: PUBLIC or INTERNAL.
+    Based on your strict analysis, is this change PUBLIC or INTERNAL? Your response must be a single word: PUBLIC or INTERNAL.
     """
 
 def build_release_prompt(knowledge_base, engineering_note):
@@ -74,7 +76,7 @@ def build_release_prompt(knowledge_base, engineering_note):
     issue_type = engineering_note.get("Issue Type", "Feature").lower()
 
     if "bug" in issue_type or "defect" in issue_type:
-        task_instruction = f"**Task:**\nThe engineering note describes a bug fix. Write a single sentence for a Markdown bullet point using this exact format:\n`{style_guide['bug_fix_writing']['format']}`"
+        task_instruction = f"**Task:**\nThe engineering note describes a bug fix. Write the final, polished release note using this exact format:\n`{style_guide['bug_fix_writing']['format']}`"
     else:
         task_instruction = f"**Task:**\nThe engineering note describes a new feature or enhancement. Write the release note following this instruction:\n\"{style_guide['feature_enhancement_writing']['instruction']}\""
     
@@ -134,7 +136,6 @@ if uploaded_csv:
                 progress_text = f"Classifying '{summary[:40]}...'"
                 progress_bar.progress((index + 1) / total_rows, text=progress_text)
                 
-                # --- AI Classifier Step ---
                 classifier_prompt = build_classifier_prompt(engineering_note)
                 try:
                     response = client.chat.completions.create(
@@ -144,10 +145,9 @@ if uploaded_csv:
                     )
                     classification = response.choices[0].message.content.strip().upper()
                 except Exception:
-                    classification = "INTERNAL" # Default to skipping on error
+                    classification = "INTERNAL"
                 
                 if "PUBLIC" in classification:
-                    # --- AI Writer Step ---
                     writer_prompt = build_release_prompt(RELEASE_KNOWLEDGE_BASE, engineering_note)
                     try:
                         response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": writer_prompt}])
@@ -160,7 +160,6 @@ if uploaded_csv:
 
             progress_bar.progress(1.0, text="Assembling final document...")
 
-            # --- Assemble the final report string and summary ---
             results = {"New Features": [], "Enhancements": [], "Bug Fixes": []}
             for eng_note, suggestion in processed_notes:
                 issue_type = eng_note.get("Issue Type", "Feature").lower()
