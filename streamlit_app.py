@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # --- Hardcoded URL for the Knowledge Base ---
-KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/mrsauravs/release-notes-assistant/refs/heads/main/release_knowledge_base.json"
+KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/release_knowledge_base.json"
 
 @st.cache_data(ttl=3600)
 def load_knowledge_base(url):
@@ -33,6 +33,7 @@ def build_release_prompt(knowledge_base, engineering_note):
     """Dynamically builds a prompt using the release knowledge base."""
     style_guide = knowledge_base['writing_style_guide']
     issue_type = engineering_note.get("Issue Type", "Feature").lower()
+    jira_key = engineering_note.get("Issue key", "") # Get the Jira Key
 
     if "bug" in issue_type or "defect" in issue_type:
         task_instruction = f"""
@@ -57,8 +58,8 @@ def build_release_prompt(knowledge_base, engineering_note):
     prompt = f"""
     You are a Principal Technical Writer at Alation. Your task is to convert a raw engineering note into a formal, customer-facing release note, following Alation's established style and structure.
 
-    **Categorization:**
-    Before writing, mentally categorize the note into one of these product areas: {', '.join(knowledge_base['key_product_areas'])}. This will help you choose the right terminology.
+    **Crucial Instruction:**
+    At the end of the generated note, you MUST append the Jira Key provided in the raw input, enclosed in parentheses. For example: `(AL-12345)`.
 
     **Raw Engineering Note:**
     ```json
@@ -83,7 +84,7 @@ st.header("Step 1: Upload Your Content")
 uploaded_csv = st.file_uploader(
     "Upload your engineering notes CSV file",
     type="csv",
-    help="CSV must contain columns like 'Summary', 'Description', and 'Issue Type'"
+    help="CSV must contain columns like 'Summary', 'Issue key', and 'Custom field (Release Notes)'"
 )
 
 st.header("Step 2: Generate Notes")
@@ -95,9 +96,15 @@ if uploaded_csv:
             df = pd.read_csv(uploaded_csv).fillna('')
             st.subheader("🤖 AI-Generated Release Notes")
             
-            # --- ADDED FILTERING LOGIC ---
+            # --- CORRECTED FILTERING LOGIC ---
+            # Using the correct column name from your CSV
+            release_notes_column = "Custom field (Release Notes)"
+            if release_notes_column not in df.columns:
+                st.error(f"Error: The uploaded CSV must contain a column named '{release_notes_column}'.")
+                st.stop()
+
             skip_texts = ['internal only', 'na']
-            process_df = df[~df['Release Notes'].str.strip().str.lower().isin(skip_texts) & (df['Release Notes'].str.strip() != '')].copy()
+            process_df = df[~df[release_notes_column].str.strip().str.lower().isin(skip_texts) & (df[release_notes_column].str.strip() != '')].copy()
             skipped_rows_count = len(df) - len(process_df)
             # --- END OF FILTERING LOGIC ---
             
@@ -105,7 +112,6 @@ if uploaded_csv:
                 st.warning("No public-facing release notes found to process in the uploaded file.")
             else:
                 client = openai.OpenAI(api_key=api_key)
-                # Now, loop over the FILTERED dataframe
                 for index, row in process_df.iterrows():
                     engineering_note = row.to_dict()
 
@@ -126,7 +132,6 @@ if uploaded_csv:
                             st.json(engineering_note)
                         st.divider()
 
-            # --- ADDED SKIPPED ROWS NOTIFICATION ---
             if skipped_rows_count > 0:
                 st.info(f"✅ Processing complete. Skipped {skipped_rows_count} internal or empty row(s).")
             else:
