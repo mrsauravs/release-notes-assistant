@@ -14,7 +14,7 @@ st.set_page_config(
 
 # --- Hardcoded URL for the Knowledge Base ---
 # IMPORTANT: Replace this placeholder with the actual raw URL of your release_knowledge_base.json file on GitHub
-KNOWLEDGE_BASE_URL = "https://github.com/mrsauravs/release-notes-assistant/blob/main/release_knowledge_base.json"
+KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/mrsauravs/release-notes-assistant/refs/heads/main/release_knowledge_base.json"
 
 @st.cache_data(ttl=3600)
 def load_knowledge_base(url):
