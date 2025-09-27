@@ -1,36 +1,19 @@
 {
   "release_structure": {
     "section_order": [
-      "Highlights",
       "New Features",
       "Enhancements",
-      "Bug Fixes",
-      "Technical Updates"
-    ],
-    "section_descriptions": {
-      "Highlights": "A brief, high-level summary of the most important changes in the release.",
-      "New Features": "Detailed descriptions of brand new capabilities.",
-      "Enhancements": "Improvements to existing features.",
-      "Bug Fixes": "A list of resolved issues.",
-      "Technical Updates": "Changes relevant to system administrators, such as updates to support matrices or connectors."
-    }
+      "Bug Fixes"
+    ]
   },
   "writing_style_guide": {
-    "feature_writing": {
-      "instruction": "Write in a benefit-oriented style. Start with the value to the user. Use a Level 3 Markdown header (`###`) for the feature title. Follow with a paragraph explaining the feature and a bulleted list of key benefits.",
-      "example_format": "### 🚀 [Feature Name]\\n\\nThis new feature allows users to...\\n\\n* **Benefit 1:** [Description of benefit]\\n* **Benefit 2:** [Description of benefit]"
+    "feature_enhancement_writing": {
+      "instruction": "First, create a short, descriptive title for the update from the 'Summary'. Do not include the Jira key in the title itself. The title should be bolded. On the next line, write a clear, benefit-oriented paragraph describing the update. At the very end of the paragraph, add the Jira key in parentheses.",
+      "example_format": "**This is a Clean Feature Title**\\n\\nA descriptive paragraph about the feature, explaining its value to the user. (JIRA-KEY-123)"
     },
     "bug_fix_writing": {
-      "instruction": "Be direct and concise. Use a consistent format that describes the problem from the user's perspective.",
-      "format": "Fixed an issue where [description of the problem]. This now ensures that [describe the correct behavior]."
-    },
-    "enhancement_writing": {
-      "instruction": "Clearly state the improvement to an existing feature.",
-      "format": "Enhanced the [Feature or Component] to now include [describe the enhancement]."
-    },
-    "technical_update_writing": {
-      "instruction": "Be specific and factual. Mention version numbers and compatibility changes where relevant.",
-      "format": "The [Component Name] has been updated to support [New Technology/Version]. Please refer to the latest Support Matrix for details."
+      "instruction": "Generate a single, concise sentence for a bullet point. Start with 'Fixed an issue where...'. At the very end of the sentence, add the Jira key in parentheses.",
+      "format": "* Fixed an issue where [description of the problem]. ([JIRA-KEY-123])"
     }
   },
   "key_product_areas": [
@@ -42,8 +25,5 @@
     "Server Administration",
     "Data Products & Marketplace",
     "API & Integrations"
-  ],
-  "categorization_guide": {
-    "instruction": "For each note, determine the primary 'Product Area' from the list and the 'Change Type' (New Feature, Enhancement, Bug Fix, Technical Update)."
-  }
+  ]
 }
