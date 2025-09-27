@@ -4,7 +4,8 @@ import google.generativeai as genai
 import openai
 import requests
 from huggingface_hub import InferenceClient
-from importlib import metadata # Corrected import for version checking
+from importlib import metadata
+import json
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -13,103 +14,99 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- PROMPT TEMPLATES ---
+# --- Hardcoded URL for the Knowledge Base ---
+# IMPORTANT: Replace this placeholder with the actual raw URL of your JSON file on GitHub
+KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/knowledge_base.json"
 
-# --- CORE PRODUCT PROMPTS ---
-CORE_BUG_PROMPT_TEMPLATE = """
-You are a seasoned technical writer at Alation. Your task is to rewrite raw engineering notes for a bug fix into a polished, customer-facing release note.
+# --- Knowledge Base and Prompt Generation ---
+@st.cache_data(ttl=3600)
+def load_knowledge_base(url):
+    """Fetches and loads the knowledge base JSON from a raw GitHub URL."""
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Fatal Error: Could not fetch knowledge base from URL: {url}. Please check the URL in the code.")
+        st.stop()
+    except json.JSONDecodeError:
+        st.error("Fatal Error: Could not decode the knowledge base. Please ensure the file at the URL is valid JSON.")
+        st.stop()
 
-**Style Rules:**
-- The audience is data analysts, data stewards, and business users.
-- The tone should be clear, professional, and user-focused.
-- Start with a phrase like "Fixed an issue where..." or "Addressed a defect that...".
-- Focus on the user's problem that was solved, not the technical details.
-- The output must be a single, complete sentence.
-- Format the final output as: **{key}**: {{Polished release note}}.
+def build_prompt_with_knowledge(knowledge_base, data):
+    """Dynamically builds a prompt using the external knowledge base and input data."""
+    if not knowledge_base:
+        return "Error: Knowledge base not loaded."
 
-**Raw Input:**
-- **Jira Key:** {key}
-- **Summary:** {summary}
-- **Description:** {description}
+    # Create formatted lists of the valid terms to guide the AI
+    deployment_options = ", ".join(f"'{item}'" for item in knowledge_base['deployment_types'])
+    role_options = ", ".join(f"'{item}'" for item in knowledge_base['user_roles'])
+    area_options = ", ".join(f"'{item}'" for item in knowledge_base['functional_areas'])
+    topic_options = ", ".join(f"'{item}'" for item in knowledge_base['topics'])
 
-Rewrite this into a single, polished bug fix note.
-"""
+    prompt = f"""
+    You are a Principal Technical Writer at Alation responsible for producing and classifying release notes. Your task is two-fold:
+    1.  **Classify the Input:** Analyze the raw input and determine the correct metadata.
+    2.  **Write the Release Note:** Write a clear, customer-facing release note based on the input and classification.
 
-CORE_FEATURE_PROMPT_TEMPLATE = """
-You are a technical writer and product marketer at Alation. Your task is to write a compelling, customer-facing release note for a new feature based on the provided engineering notes.
+    **Reference Information (Valid Options):**
+    -   **Deployment Types:** {deployment_options}
+    -   **User Roles:** {role_options}
+    -   **Functional Areas:** {area_options}
+    -   **Topics:** {topic_options}
 
-**Style Rules:**
-- The audience is data analysts, data stewards, and business users.
-- The tone should be exciting, clear, and focused on user benefits.
-- Create a Markdown header using the Jira Summary.
-- Below the header, write a concise paragraph (2-3 sentences) that explains what the feature is and the value it provides to the user. Avoid technical jargon.
+    **Raw Input Data:**
+    -   **Summary:** {data.get('summary', "")}
+    -   **Description:** {data.get('description', "")}
+    -   **Issue Type:** {data.get('issue_type', "Feature")}
+    -   **Engineer's Notes:** {data.get('raw_notes', "")}
 
-**Raw Input:**
-- **Jira Summary:** {summary}
-- **Description:** {description}
-- **Engineer's Notes:** {raw_notes}
+    **Your Task:**
+    First, based on the raw input, provide a YAML block with the most appropriate classification. Choose ONLY from the valid options provided in the reference section.
+    -   `Deployment Type`: Choose one. Infer based on keywords like 'Cloud', 'Customer Managed', 'Server', or 'Agent'. If unsure or applicable to both, choose 'Customer Managed, Alation Cloud Service'.
+    -   `User Role`: Choose the one primary user role most affected by this change.
+    -   `Functional Area`: Choose the one best-fitting functional area.
+    -   `Topics`: Choose 1 to 3 relevant topics.
 
-Write the feature release note based on these rules.
-"""
+    Second, write the customer-facing release note below the YAML block, separated by '---'.
+    -   For new features, use a structured format with a header, a "What's New?" section, and a "Why it Matters" section.
+    -   For bug fixes, use a single, direct sentence.
 
-# --- DEVELOPER PORTAL (API) PROMPTS ---
-API_BUG_PROMPT_TEMPLATE = """
-You are a technical writer for the developer portal at Alation. Your task is to rewrite raw engineering notes for a bug fix into a clear, direct API change log entry.
+    **Example Output Format:**
+    ```yaml
+    Deployment Type: Customer Managed
+    User Role: Server Admin
+    Functional Area: Server Maintenance
+    Topics:
+      - Back Up and Restore Usage
+      - Logging
+    ```
+    ---
+    ## 🚀 Enhanced Backup and Restore Monitoring
+    **What's New?**
+    You can now monitor the status of backup and restore jobs directly from the Alation UI.
+    **Why it Matters**
+    - **Improved Visibility:** Administrators can now easily check the health and history of their backups without accessing the server backend.
+    - **Faster Troubleshooting:** Quick access to logs and status helps diagnose issues more efficiently.
 
-**Style Rules:**
-- The audience is software developers using the Alation API.
-- The tone is direct, technical, and unambiguous.
-- If a component is provided, lead with it in bold brackets: **[{components}]**.
-- Clearly state the bug that was fixed.
-- The output must be a single, complete sentence.
-- Format the final output as: **{key}**: {{Polished API note}}.
-
-**Raw Input:**
-- **Jira Key:** {key}
-- **Summary:** {summary}
-- **Components:** {components}
-
-Rewrite this into a single, technical API bug fix note.
-"""
-
-API_FEATURE_PROMPT_TEMPLATE = """
-You are a technical writer for the developer portal at Alation. Your task is to write a clear, direct API change log entry for a new feature.
-
-**Style Rules:**
-- The audience is software developers using the Alation API.
-- The tone is direct, technical, and unambiguous.
-- If a component is provided, lead with it in bold brackets: **[{components}]**.
-- Announce the new feature and briefly describe its technical capabilities (e.g., new endpoint, updated parameters, new functionality).
-- The output must be a single, complete sentence.
-- Format the final output as: **{key}**: {{Polished API note}}.
-
-**Raw Input:**
-- **Jira Key:** {key}
-- **Summary:** {summary}
-- **Components:** {components}
-- **Engineer's Notes:** {raw_notes}
-
-Rewrite this into a single, technical API feature note.
-"""
+    Now, process the provided raw input and generate the response in the specified format.
+    """
+    return prompt
 
 
-# --- LLM API Call Functions ---
-
+# --- LLM API Call Functions (Unchanged) ---
 def call_gemini_api(prompt, api_key):
     try:
-        # This will display the EXACT library version in your app using the modern method
         version = metadata.version("google-generativeai")
         st.success(f"Running with google-generativeai version: {version}")
-
         genai.configure(api_key=api_key)
-        # Use the '-latest' tag for the model name
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
         st.error(f"An error occurred with the Gemini API:")
         st.exception(e)
-        return None # Return None on error
+        return None
 
 def call_openai_api(prompt, api_key):
     try:
@@ -123,39 +120,23 @@ def call_openai_api(prompt, api_key):
         return f"Error with OpenAI API: {e}"
 
 def call_huggingface_api(prompt, api_key, model_id="mistralai/Mistral-7B-Instruct-v0.2"):
-    """
-    Calls the Hugging Face API using the recommended InferenceClient.
-    """
     try:
-        # Initialize the client with your API key
         client = InferenceClient(token=api_key)
-        
-        # Make the API call
         response = client.text_generation(
             prompt, 
             model=model_id,
-            max_new_tokens=256, # Set a reasonable limit for the response length
+            max_new_tokens=512,
             return_full_text=False
         )
-        
-        # The client directly returns the generated text string
         return response
     except Exception as e:
         return f"Error with Hugging Face API: {e}"
 
-# --- Main Note Generation Logic ---
-def generate_note(model_provider, api_key, note_type, issue_type, data):
-    """Dispatcher function to select the right prompt and call the correct API."""
-
-    bug_fix_keywords = ['bug', 'support escalation']
-    is_bug = any(keyword in issue_type.lower() for keyword in bug_fix_keywords)
-
-    if note_type == "Core":
-        prompt_template = CORE_BUG_PROMPT_TEMPLATE if is_bug else CORE_FEATURE_PROMPT_TEMPLATE
-    else:  # API
-        prompt_template = API_BUG_PROMPT_TEMPLATE if is_bug else API_FEATURE_PROMPT_TEMPLATE
+# --- Main Note Generation Logic (Refactored) ---
+def generate_note(model_provider, api_key, knowledge_base, data):
+    """Dispatcher function to build a prompt and call the correct API."""
     
-    prompt = prompt_template.format(**data)
+    prompt = build_prompt_with_knowledge(knowledge_base, data)
 
     if model_provider == "Gemini":
         return call_gemini_api(prompt, api_key)
@@ -167,102 +148,73 @@ def generate_note(model_provider, api_key, note_type, issue_type, data):
         return "Error: Invalid model provider selected."
 
 # --- UI Layout ---
-st.title("📝 Multi-LLM Release Notes Assistant 🚀")
-st.markdown("This tool uses your chosen LLM to draft release notes from engineering input.")
+st.title("📝 Intelligent Release Notes Assistant 🚀")
+st.markdown("This tool uses a knowledge base to generate and classify release notes from your engineering input.")
 
 # --- Sidebar for Configuration ---
 with st.sidebar:
     st.header("⚙️ Configuration")
+    st.info("Knowledge base is loaded automatically from a predefined URL.")
     model_provider = st.selectbox(
         "Choose your LLM Provider",
-        ("Gemini", "OpenAI", "Hugging Face")
+        ("OpenAI", "Gemini", "Hugging Face")
     )
     api_key = st.text_input(f"Enter your {model_provider} API Key", type="password")
 
-    st.info(
-        "**Where to find your API Key:**\n"
-        "- **Gemini:** [Google AI Studio](https://aistudio.google.com/)\n"
-        "- **OpenAI:** [OpenAI Platform](https://platform.openai.com/api-keys)\n"
-        "- **Hugging Face:** [Access Tokens](https://huggingface.co/settings/tokens)"
-    )
+# --- Main Application Logic ---
+knowledge_base = load_knowledge_base(KNOWLEDGE_BASE_URL)
 
-# --- Main Application Tabs ---
-core_tab, dev_tab = st.tabs(["Alation Core Release Notes", "Developer Portal (API) Release Notes"])
+st.header("Generate and Classify Release Notes")
+uploaded_file = st.file_uploader(
+    "Upload a CSV with the required columns.",
+    key="main_uploader",
+    type="csv"
+)
 
-def run_generation(note_type, uploader_key, button_key):
-    """Generic function to handle the UI logic for file upload and generation."""
-    st.markdown(
-        "**Important**: Your CSV must contain the columns `Issue Type`, `Key`, `Summary`, `Description`, `Components`, and `Release Notes`."
-    )
-    uploaded_file = st.file_uploader(
-        "Upload a CSV with the required columns.",
-        key=uploader_key,
-        type="csv"
-    )
-    if uploaded_file:
-        if st.button(f"Generate {note_type} Release Notes", key=button_key):
-            if not api_key:
-                st.error("Please enter your API key in the sidebar.")
-                return
-
+if uploaded_file:
+    if st.button("✨ Generate Release Notes", key="main_generate"):
+        if not api_key:
+            st.error("Please enter your API key in the sidebar.")
+        elif not knowledge_base:
+            # The load_knowledge_base function will already show an error and stop.
+            # This is a fallback.
+            st.error("Could not load Knowledge Base. See error message above.")
+        else:
             try:
-                # Read the CSV and convert 'Release Notes' to string to handle empty cells
-                df = pd.read_csv(uploaded_file, dtype={"Release Notes": str})
-                df['Release Notes'] = df['Release Notes'].fillna('') # Ensure NaN becomes empty string
+                df = pd.read_csv(uploaded_file, dtype={"Release Notes": str}).fillna('')
                 
                 st.subheader("🤖 AI-Generated Suggestions")
                 progress_bar = st.progress(0, text="Starting generation...")
 
-                # Define texts that indicate a row should be skipped
-                skip_texts = ['internal only', 'na']
-                skipped_rows_count = 0
-                
-                # Create a filtered dataframe of rows to be processed
-                process_df = df[~df['Release Notes'].str.strip().str.lower().isin(skip_texts) & (df['Release Notes'].str.strip() != '')]
-                skipped_rows_count = len(df) - len(process_df)
-                
-                # Loop through only the rows that need processing
-                for index, row in process_df.iterrows():
-                    issue_type_val = row.get('Issue Type', 'Feature')
-                    progress_text = f"Generating note for {row.get('Key', 'N/A')} ({issue_type_val})..."
-                    current_progress = (index + 1) / len(df)
-                    progress_bar.progress(current_progress, text=progress_text)
-
+                for i, row in enumerate(df.itertuples(index=False)):
+                    row_dict = row._asdict()
                     data_payload = {
-                        'key': row.get('Key', ""),
-                        'summary': row.get('Summary', ""),
-                        'description': row.get('Description', ""),
-                        'raw_notes': row.get('Release Notes', ""),
-                        'components': row.get('Components', "")
+                        'key': row_dict.get('Key', ""),
+                        'summary': row_dict.get('Summary', ""),
+                        'description': row_dict.get('Description', ""),
+                        'raw_notes': row_dict.get('Release Notes', ""),
+                        'components': row_dict.get('Components', ""),
+                        'issue_type': row_dict.get('Issue Type', 'Feature')
                     }
+
+                    progress_text = f"Processing {data_payload['key']} ({i+1}/{len(df)})..."
+                    progress_bar.progress((i + 1) / len(df), text=progress_text)
 
                     with st.spinner(progress_text):
                         suggestion = generate_note(
                             model_provider, 
                             api_key, 
-                            note_type, 
-                            issue_type_val,
+                            knowledge_base,
                             data_payload
                         )
                     
-                    if suggestion: # Check if the suggestion is not None
+                    if suggestion:
                         st.markdown(suggestion, unsafe_allow_html=True)
-                        st.code(f"Original Summary: {data_payload['summary']}\nIssue Type: {issue_type_val}\nComponents: {data_payload['components']}", language="text")
+                        st.code(f"Original Summary: {data_payload['summary']}\nIssue Type: {data_payload['issue_type']}\nComponents: {data_payload['components']}", language="text")
                         st.divider()
 
                 progress_bar.progress(1.0, text="Generation complete!")
                 st.success("All notes have been generated successfully!")
-                
-                if skipped_rows_count > 0:
-                    st.info(f"💡 Skipped {skipped_rows_count} row(s) because their 'Release Notes' column was empty or marked for internal use only.")
 
             except Exception as e:
                 st.error(f"An error occurred during file processing: {e}")
-
-with core_tab:
-    st.header("Generate General Release Notes")
-    run_generation("Core", "core_uploader", "core_generate")
-
-with dev_tab:
-    st.header("Generate API Release Notes")
-    run_generation("API", "dev_uploader", "dev_generate")
