@@ -29,32 +29,41 @@ RELEASE_KNOWLEDGE_BASE = {
 }
 
 # --- Helper functions ---
+def find_column_by_substring(df, substring):
+    substring = substring.lower()
+    for col in df.columns:
+        if substring in col.lower():
+            return col
+    return None
+
 def build_classifier_prompt(engineering_note):
-    """Builds a prompt to classify a note as PUBLIC or INTERNAL."""
+    """Builds a more nuanced prompt to classify a note as PUBLIC or INTERNAL."""
     triage_data = {
         "Summary": engineering_note.get("Summary", ""),
         "Issue Type": engineering_note.get("Issue Type", ""),
-        "Description": (engineering_note.get("Description", "") or "")[:300]
+        "Description": (engineering_note.get("Description", "") or "")[:400]
     }
+    
     return f"""
-    You are a meticulous Principal Release Manager. Your primary goal is to shield customers from internal engineering details. You must be skeptical and default to INTERNAL unless a change is clearly and directly customer-facing.
+    You are a discerning Principal Release Manager. Your goal is to accurately identify which engineering tasks represent customer-facing changes.
 
-    **CRITICAL RULE: Direct vs. Indirect Benefit**
-    If a change provides an *indirect* benefit (e.g., improves security, performance) but does NOT introduce a new, tangible feature, UI change, or bug fix that a user can directly observe, you MUST classify it as **INTERNAL**.
+    **Analysis Framework:**
+    Your decision must be based on the **ultimate outcome** for the end-user. Backend work or refactoring can still be part of a PUBLIC feature if the result is a new capability, a noticeable performance improvement, or a fixed bug.
 
-    **Analyze the ticket data based on these rules:**
-    - **PUBLIC:** A new button, a new filter option, a visible performance boost, a fixed bug, support for a new data source. The benefit is direct and obvious to the user.
-    - **INTERNAL:** A code refactor, updating a dependency, fixing a unit test, migrating a build pipeline.
+    **How to Weigh Evidence:**
+    1.  **Prioritize the 'Summary':** The summary often describes the user-facing goal. If it implies a new capability, lean towards PUBLIC.
+    2.  **Analyze the 'Description' for Outcome:** Look past engineering keywords like 'refactor' or 'migrate'. Find the *reason* for the work. Does the refactor enable a new UI component? Does the migration improve speed? If so, it's likely PUBLIC.
+    3.  **Do not over-rely on keywords:** A task like "Refactor Search Indexing" is PUBLIC if it makes search faster. A task like "Update Frontend Dependencies" is PUBLIC if it patches a security vulnerability.
 
-    **Clue Keywords for INTERNAL:**
-    - refactor, pipeline, unit test, migration, tech debt, infrastructure, dependency, cleanup
+    **Task:**
+    Analyze the ticket data below. If the ultimate result is a direct, observable change or benefit for the customer, classify it as **PUBLIC**. Otherwise, classify it as **INTERNAL**.
 
     **Ticket Data to Classify:**
     ```json
     {json.dumps(triage_data, indent=2)}
     ```
 
-    Based on your strict analysis, is this change PUBLIC or INTERNAL? Your response must be a single word: PUBLIC or INTERNAL.
+    Your response must be a single word: PUBLIC or INTERNAL.
     """
 
 def build_release_prompt(knowledge_base, engineering_note):
@@ -84,7 +93,6 @@ def build_release_prompt(knowledge_base, engineering_note):
 # --- Main Application Logic ---
 st.title("Intelligent Release Notes Assistant 🚀")
 
-# Initialize session state
 if 'final_report' not in st.session_state: st.session_state.final_report = None
 if 'summary_data' not in st.session_state: st.session_state.summary_data = None
 
@@ -110,7 +118,6 @@ if st.button("📝 Generate Release Notes Document"):
     st.session_state.final_report = None
     st.session_state.summary_data = None
     
-    # Validation
     if not all([epics_csv, stories_csv, bugs_csv, escalations_csv]):
         st.error("Please upload all four CSV files to proceed.")
     elif not api_key:
@@ -128,12 +135,8 @@ if st.button("📝 Generate Release Notes Document"):
         skipped_items = []
         public_epic_keys = set()
 
-        # --- AI CLASSIFICATION AND WRITING ---
         st.subheader("Processing Notes...")
-        all_dfs = {
-            "Epics": df_epics, "Stories": df_stories, 
-            "Bugs": df_bugs, "Escalations": df_escalations
-        }
+        all_dfs = { "Epics": df_epics, "Stories": df_stories, "Bugs": df_bugs, "Escalations": df_escalations }
         progress_bar = st.progress(0, text="Initializing...")
         total_rows = sum(len(df) for df in all_dfs.values())
         processed_rows = 0
@@ -162,7 +165,7 @@ if st.button("📝 Generate Release Notes Document"):
             eng_note = row.to_dict()
             if eng_note.get('parent') in public_epic_keys:
                 skipped_items.append((eng_note.get('Key'), eng_note.get('Summary'), "Skipped (Parent Epic is public)"))
-                continue # Skip this story
+                continue
             
             classifier_prompt = build_classifier_prompt(eng_note)
             try:
@@ -192,22 +195,20 @@ if st.button("📝 Generate Release Notes Document"):
             except Exception as e:
                 skipped_items.append((eng_note.get('Key'), eng_note.get('Summary'), f"Classifier failed: {e}"))
 
-        # --- AI WRITING STAGE ---
+        # AI WRITING STAGE
         final_results = {"New Features": [], "Enhancements": [], "Bug Fixes": []}
         
-        # Write Features
         for note in processed_features:
             prompt = build_release_prompt(RELEASE_KNOWLEDGE_BASE, note)
             response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
             final_results["New Features"].append(response.choices[0].message.content.strip())
         
-        # Write Bugs
         for note in processed_bugs:
             prompt = build_release_prompt(RELEASE_KNOWLEDGE_BASE, note)
             response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
             final_results["Bug Fixes"].append(response.choices[0].message.content.strip())
 
-        # --- Assemble Final Document ---
+        # Assemble Final Document
         progress_bar.progress(1.0, text="Assembling final document...")
         month_year = datetime.now().strftime('%B %Y')
         report_parts = [f"# Release {release_version}", f"_{month_year}_"]
@@ -229,7 +230,6 @@ if st.button("📝 Generate Release Notes Document"):
         }
         st.success("✅ Release notes document generated successfully!")
 
-# --- Display Results and Download ---
 if st.session_state.summary_data:
     summary = st.session_state.summary_data
     st.info(f"**Processing Summary:** {summary['processed_count']} notes generated, {summary['skipped_count']} notes skipped.")
