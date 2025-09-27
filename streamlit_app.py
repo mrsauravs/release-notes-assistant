@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # --- Hardcoded URL for the Knowledge Base ---
-KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/mrsauravs/release-notes-assistant/refs/heads/main/release_knowledge_base.json"
+KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/mrsauravs/release-notes-assistant/refs/heads/main/knowledge_base.json"
 
 # --- Helper functions ---
 def find_column_by_substring(df, substring):
