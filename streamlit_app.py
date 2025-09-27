@@ -4,6 +4,7 @@ import json
 import requests
 import openai
 from datetime import datetime
+import re
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -14,6 +15,15 @@ st.set_page_config(
 
 # --- Hardcoded URL for the Knowledge Base ---
 KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/mrsauravs/release-notes-assistant/refs/heads/main/release_knowledge_base.json"
+
+# --- Helper functions ---
+def find_column_by_substring(df, substring):
+    """Dynamically finds a column name containing a given substring."""
+    substring = substring.lower()
+    for col in df.columns:
+        if substring in col.lower():
+            return col
+    return None
 
 @st.cache_data(ttl=3600)
 def load_knowledge_base(url):
@@ -29,52 +39,26 @@ def load_knowledge_base(url):
         st.error("Fatal Error: Could not decode the knowledge base. Please ensure the file at the URL is valid JSON.")
         st.stop()
 
-def build_classifier_prompt(engineering_note):
-    """Builds a prompt to classify a note as PUBLIC or INTERNAL."""
-    # Using a subset of the note for brevity and cost-effectiveness
-    triage_data = {
-        "Summary": engineering_note.get("Summary", ""),
-        "Issue Type": engineering_note.get("Issue Type", ""),
-        "Description": (engineering_note.get("Description", "") or "")[:300] # Truncate for efficiency
-    }
-    
-    return f"""
-    You are an expert Release Manager at an enterprise software company. Analyze the following engineering ticket data to determine if it describes a customer-facing change or an internal-only task.
-
-    - **PUBLIC** changes are new features, enhancements, or bug fixes that a customer would notice or benefit from. They affect the user interface, functionality, performance, or API.
-    - **INTERNAL** changes are tasks like refactoring code, updating internal libraries, database migrations, or technical debt with no direct, observable impact on the customer.
-
-    Look for clues:
-    - User-facing benefits in the summary/description suggest PUBLIC.
-    - Terms like 'refactor', 'tech debt', 'internal testing', 'update dependency' suggest INTERNAL.
-    - 'Bug', 'Story', 'Enhancement' are usually PUBLIC. 'Task', 'Spike', 'Sub-task' are usually INTERNAL.
-
-    **Ticket Data:**
-    ```json
-    {json.dumps(triage_data, indent=2)}
-    ```
-
-    Is this change PUBLIC or INTERNAL? Your response must be a single word: PUBLIC or INTERNAL.
-    """
-
 def build_release_prompt(knowledge_base, engineering_note):
-    """Dynamically builds a prompt to write the release note."""
+    """Dynamically builds a prompt using the release knowledge base."""
     style_guide = knowledge_base['writing_style_guide']
     issue_type = engineering_note.get("Issue Type", "Feature").lower()
-
-    if "bug" in issue_type or "defect" in issue_type:
-        task_instruction = f"**Task:**\nThe engineering note describes a bug fix. Write the final, polished release note using this exact format:\n`{style_guide['bug_fix_writing']['format']}`"
-    else:
-        task_instruction = f"**Task:**\nThe engineering note describes a new feature or enhancement. Write the release note following this instruction:\n\"{style_guide['feature_enhancement_writing']['instruction']}\""
     
+    if "bug" in issue_type or "defect" in issue_type:
+        task_instruction = f"""
+        **Task:**
+        The engineering note describes a bug fix. Write a single sentence for a Markdown bullet point using this exact format:
+        `{style_guide['bug_fix_writing']['format']}`
+        """
+    else: # Default to feature/enhancement
+        task_instruction = f"""
+        **Task:**
+        The engineering note describes a new feature or enhancement. Write the release note following this instruction:
+        "{style_guide['feature_enhancement_writing']['instruction']}"
+        """
+
     prompt = f"""
-    You are a Principal Technical Writer at Alation. Convert the raw engineering note into a formal, customer-facing release note.
-
-    **CRITICAL RULE: SANITIZE THE OUTPUT**
-    Remove all internal details like process IDs (e.g., 'pid 1'), internal server names, or non-public feature names.
-
-    **Crucial Instruction:**
-    At the end of the generated note, you MUST append the Jira Key, enclosed in parentheses. Example: `(AL-12345)`.
+    You are a Principal Technical Writer at Alation. Your task is to convert a raw engineering note into a formal, customer-facing release note. You must strictly follow the format requested.
 
     **Raw Engineering Note:**
     ```json
@@ -88,11 +72,8 @@ def build_release_prompt(knowledge_base, engineering_note):
 # --- Main Application Logic ---
 st.title("Intelligent Release Notes Assistant 🚀")
 
-# Initialize session state
 if 'final_report' not in st.session_state:
     st.session_state.final_report = None
-if 'summary_data' not in st.session_state:
-    st.session_state.summary_data = None
 
 release_kb = load_knowledge_base(KNOWLEDGE_BASE_URL)
 
@@ -112,7 +93,6 @@ st.header("Step 2: Generate Notes")
 if uploaded_csv:
     if st.button("📝 Generate Release Notes Document"):
         st.session_state.final_report = None
-        st.session_state.summary_data = None
         
         if not api_key:
             st.error("Please enter your OpenAI API key in the sidebar.")
@@ -120,92 +100,62 @@ if uploaded_csv:
             df = pd.read_csv(uploaded_csv).fillna('')
             st.subheader("Processing Notes...")
             
-            client = openai.OpenAI(api_key=api_key)
-            processed_notes = []
-            skipped_notes = []
+            release_notes_column = find_column_by_substring(df, 'release notes')
+            if release_notes_column is None:
+                st.error("Error: Could not find a column containing 'Release Notes' in the uploaded CSV.")
+                st.stop()
             
-            progress_bar = st.progress(0, text="Classifying notes...")
-            total_rows = len(df)
+            is_empty = df[release_notes_column].str.strip() == ''
+            is_na = df[release_notes_column].str.strip().str.lower() == 'na'
+            is_internal = df[release_notes_column].str.strip().str.lower().str.contains('internal', na=False)
+            process_df = df[~(is_empty | is_na | is_internal)].copy()
+            
+            if process_df.empty:
+                st.warning("No public-facing release notes found to process in the uploaded file.")
+            else:
+                client = openai.OpenAI(api_key=api_key)
+                results = {"New Features": [], "Enhancements": [], "Bug Fixes": []}
+                progress_bar = st.progress(0, text="Generating notes...")
+                total_rows = len(process_df)
+                processed_count = 0
 
-            for index, row in df.iterrows():
-                engineering_note = row.to_dict()
-                summary = engineering_note.get('Summary', 'N/A')
-                jira_key = engineering_note.get('Issue key', 'N/A')
+                for index, row in process_df.iterrows():
+                    processed_count += 1
+                    engineering_note = row.to_dict()
+                    summary = engineering_note.get('Summary', 'N/A')
+                    issue_type = engineering_note.get("Issue Type", "Feature").lower()
+                    
+                    progress_bar.progress(processed_count / total_rows, text=f"Processing: {summary}")
+                    
+                    prompt = build_release_prompt(release_kb, engineering_note)
+                    try:
+                        response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
+                        suggestion = response.choices[0].message.content.strip()
 
-                progress_text = f"Classifying '{summary}'..."
-                progress_bar.progress((index + 1) / total_rows, text=progress_text)
+                        if "bug" in issue_type or "defect" in issue_type:
+                            results["Bug Fixes"].append(suggestion)
+                        elif "enhancement" in issue_type:
+                            results["Enhancements"].append(suggestion)
+                        else:
+                            results["New Features"].append(suggestion)
+
+                    except Exception as e:
+                        st.warning(f"Could not process '{summary}': {e}")
                 
-                # --- NEW: AI Classifier Step ---
-                classifier_prompt = build_classifier_prompt(engineering_note)
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-4o",
-                        messages=[{"role": "user", "content": classifier_prompt}],
-                        max_tokens=5,
-                        temperature=0
-                    )
-                    classification = response.choices[0].message.content.strip().upper()
-                except Exception as e:
-                    classification = "INTERNAL" # Default to skipping on error
-                    st.warning(f"Could not classify '{summary}': {e}")
+                progress_bar.progress(1.0, text="Assembling final document...")
+
+                month_year = datetime.now().strftime('%B %Y')
+                report_parts = [f"# Release {release_version}", f"_{month_year}_"]
+                for section in release_kb['release_structure']['section_order']:
+                    if results.get(section):
+                        report_parts.append(f"\n\n**{section}**\n")
+                        if section == "Bug Fixes":
+                            report_parts.append("\n".join(results[section]))
+                        else:
+                            report_parts.append("\n\n".join(results[section]))
                 
-                if "PUBLIC" in classification:
-                    # --- AI Writer Step ---
-                    with st.spinner(f"Writing note for '{summary}'..."):
-                        writer_prompt = build_release_prompt(release_kb, engineering_note)
-                        try:
-                            response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": writer_prompt}])
-                            suggestion = response.choices[0].message.content.strip()
-                            processed_notes.append((jira_key, summary, suggestion))
-                        except Exception as e:
-                            skipped_notes.append((jira_key, summary, f"AI writer failed: {e}"))
-                else:
-                    skipped_notes.append((jira_key, summary, "Classified as Internal"))
-
-            progress_bar.progress(1.0, text="Assembling final document...")
-
-            # --- NEW: Assemble the final report string and summary ---
-            results = {"New Features": [], "Enhancements": [], "Bug Fixes": []}
-            for jira_key, summary, suggestion in processed_notes:
-                # Simple categorization for assembly
-                if "bug" in summary.lower() or "fix" in summary.lower():
-                     results["Bug Fixes"].append(suggestion)
-                else: # Assume Feature/Enhancement
-                     results["New Features"].append(suggestion)
-
-            month_year = datetime.now().strftime('%B %Y')
-            report_parts = [f"# Release {release_version}", f"_{month_year}_"]
-            for section, notes in results.items():
-                if notes:
-                    report_parts.append(f"\n\n**{section}**\n")
-                    if section == "Bug Fixes":
-                        report_parts.append("\n".join(notes))
-                    else:
-                        report_parts.append("\n\n".join(notes))
-            
-            st.session_state.final_report = "\n".join(report_parts)
-            st.session_state.summary_data = {
-                "total": total_rows,
-                "processed_count": len(processed_notes),
-                "skipped_count": len(skipped_notes),
-                "processed_list": processed_notes,
-                "skipped_list": skipped_notes
-            }
-            st.success("✅ Release notes document generated successfully!")
-
-# --- Display Results and Download ---
-if st.session_state.summary_data:
-    summary = st.session_state.summary_data
-    st.info(f"**Processing Summary:** {summary['processed_count']} notes generated, {summary['skipped_count']} notes skipped.")
-    
-    with st.expander("Show Detailed Processing Report"):
-        st.markdown("#### ✅ Processed Notes")
-        for jira_key, summary_text, _ in summary['processed_list']:
-            st.text(f"- {jira_key}: {summary_text}")
-            
-        st.markdown("####  skipped_notes")
-        for jira_key, summary_text, reason in summary['skipped_list']:
-            st.text(f"- {jira_key}: {summary_text} (Reason: {reason})")
+                st.session_state.final_report = "\n".join(report_parts)
+                st.success("✅ Release notes document generated successfully!")
 
 if st.session_state.final_report:
     st.header("Step 3: Download Report")
