@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import json
 import requests
-import openai 
-# Import other LLM libraries as needed
+import openai
+from datetime import datetime
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -85,6 +85,10 @@ def build_release_prompt(knowledge_base, engineering_note):
 # --- Main Application Logic ---
 st.title("Intelligent Release Notes Assistant 🚀")
 
+# Initialize session state for report content
+if 'report_content' not in st.session_state:
+    st.session_state.report_content = None
+
 release_kb = load_knowledge_base(KNOWLEDGE_BASE_URL)
 
 with st.sidebar:
@@ -102,6 +106,8 @@ uploaded_csv = st.file_uploader(
 st.header("Step 2: Generate Notes")
 if uploaded_csv:
     if st.button("📝 Generate Release Notes"):
+        st.session_state.report_content = []
+        
         if not api_key:
             st.error("Please enter your OpenAI API key in the sidebar.")
         else:
@@ -113,39 +119,55 @@ if uploaded_csv:
                 st.error("Error: Could not find a column containing 'Release Notes' in the uploaded CSV.")
                 st.stop()
             
-            st.success(f"Found release notes column: '{release_notes_column}'")
-
+            # Filter the dataframe for public-facing notes
             skip_texts = ['internal only', 'na']
             process_df = df[~df[release_notes_column].str.strip().str.lower().isin(skip_texts) & (df[release_notes_column].str.strip() != '')].copy()
             skipped_rows_count = len(df) - len(process_df)
             
             if process_df.empty:
                 st.warning("No public-facing release notes found to process in the uploaded file.")
+                st.session_state.report_content = None
             else:
                 client = openai.OpenAI(api_key=api_key)
                 for index, row in process_df.iterrows():
                     engineering_note = row.to_dict()
-
-                    with st.spinner(f"Generating note for '{engineering_note.get('Summary', 'N/A')}'..."):
+                    jira_key = engineering_note.get('Issue key', 'N/A')
+                    summary = engineering_note.get('Summary', 'No Summary')
+                    
+                    with st.spinner(f"Generating note for '{summary}'..."):
                         prompt = build_release_prompt(release_kb, engineering_note)
                         
                         try:
-                            response = client.chat.completions.create(
-                                model="gpt-4o",
-                                messages=[{"role": "user", "content": prompt}]
-                            )
-                            suggestion = response.choices[0].message.content
+                            response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
+                            ai_suggestion = response.choices[0].message.content
                         except Exception as e:
-                            suggestion = f"An error occurred while calling the API: {e}"
+                            ai_suggestion = f"An error occurred while calling the API: {e}"
 
-                        st.markdown(suggestion, unsafe_allow_html=True)
-                        with st.expander("Show Raw Input"):
-                            st.json(engineering_note)
+                        # Display live results in the app
+                        st.markdown(f"#### {jira_key}: {summary}")
+                        st.markdown(ai_suggestion, unsafe_allow_html=True)
                         st.divider()
 
+                        # Build the report content for the downloadable MD file
+                        report_entry = f"## {jira_key}: {summary}\n\n{ai_suggestion}\n\n---"
+                        st.session_state.report_content.append(report_entry)
+            
             if skipped_rows_count > 0:
                 st.info(f"✅ Processing complete. Skipped {skipped_rows_count} internal or empty row(s).")
             else:
                 st.success("✅ Processing complete. All rows were processed.")
-else:
-    st.info("Please upload a CSV file to begin.")
+
+# --- Download button section ---
+if st.session_state.report_content:
+    st.header("Step 3: Download Report")
+
+    full_report = "\n".join(st.session_state.report_content)
+    report_header = f"# AI-Generated Release Notes\n_Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_\n\n---\n\n"
+    final_report_data = report_header + full_report
+
+    st.download_button(
+        label="📥 Download AI-Generated Notes (.md)",
+        data=final_report_data.encode('utf-8'),
+        file_name=f"AI_Generated_Release_Notes_{datetime.now().strftime('%Y%m%d')}.md",
+        mime="text/markdown",
+    )
