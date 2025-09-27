@@ -13,7 +13,15 @@ st.set_page_config(
 )
 
 # --- Hardcoded URL for the Knowledge Base ---
-KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/mrsauravs/release-notes-assistant/refs/heads/main/release_knowledge_base.json"
+KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/release_knowledge_base.json"
+
+# --- Helper function to find the release notes column ---
+def find_release_notes_column(df):
+    """Dynamically finds the column containing 'Release Notes', case-insensitive."""
+    for col in df.columns:
+        if 'release notes' in col.lower():
+            return col
+    return None
 
 @st.cache_data(ttl=3600)
 def load_knowledge_base(url):
@@ -33,8 +41,7 @@ def build_release_prompt(knowledge_base, engineering_note):
     """Dynamically builds a prompt using the release knowledge base."""
     style_guide = knowledge_base['writing_style_guide']
     issue_type = engineering_note.get("Issue Type", "Feature").lower()
-    jira_key = engineering_note.get("Issue key", "") # Get the Jira Key
-
+    
     if "bug" in issue_type or "defect" in issue_type:
         task_instruction = f"""
         **Task:**
@@ -56,7 +63,12 @@ def build_release_prompt(knowledge_base, engineering_note):
         """
 
     prompt = f"""
-    You are a Principal Technical Writer at Alation. Your task is to convert a raw engineering note into a formal, customer-facing release note, following Alation's established style and structure.
+    You are a Principal Technical Writer at Alation. Your task is to convert a raw engineering note into a formal, customer-facing release note.
+
+    ---
+    **CRITICAL RULE: SANITIZE THE OUTPUT**
+    The raw engineering note may contain internal jargon, project codenames, or technical identifiers. You MUST rewrite the content to be fully customer-facing. **Remove all internal details like process IDs (e.g., 'pid 1'), internal server names, or non-public feature names.** The final output must only contain language that an external customer would understand.
+    ---
 
     **Crucial Instruction:**
     At the end of the generated note, you MUST append the Jira Key provided in the raw input, enclosed in parentheses. For example: `(AL-12345)`.
@@ -84,7 +96,7 @@ st.header("Step 1: Upload Your Content")
 uploaded_csv = st.file_uploader(
     "Upload your engineering notes CSV file",
     type="csv",
-    help="CSV must contain columns like 'Summary', 'Issue key', and 'Custom field (Release Notes)'"
+    help="CSV must contain columns like 'Summary', 'Issue key', and a 'Release Notes' column."
 )
 
 st.header("Step 2: Generate Notes")
@@ -96,17 +108,16 @@ if uploaded_csv:
             df = pd.read_csv(uploaded_csv).fillna('')
             st.subheader("🤖 AI-Generated Release Notes")
             
-            # --- CORRECTED FILTERING LOGIC ---
-            # Using the correct column name from your CSV
-            release_notes_column = "Custom field (Release Notes)"
-            if release_notes_column not in df.columns:
-                st.error(f"Error: The uploaded CSV must contain a column named '{release_notes_column}'.")
+            release_notes_column = find_release_notes_column(df)
+            if release_notes_column is None:
+                st.error("Error: Could not find a column containing 'Release Notes' in the uploaded CSV.")
                 st.stop()
+            
+            st.success(f"Found release notes column: '{release_notes_column}'")
 
             skip_texts = ['internal only', 'na']
             process_df = df[~df[release_notes_column].str.strip().str.lower().isin(skip_texts) & (df[release_notes_column].str.strip() != '')].copy()
             skipped_rows_count = len(df) - len(process_df)
-            # --- END OF FILTERING LOGIC ---
             
             if process_df.empty:
                 st.warning("No public-facing release notes found to process in the uploaded file.")
