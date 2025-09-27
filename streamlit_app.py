@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # --- Hardcoded URL for the Knowledge Base ---
-KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/mrsauravs/release-notes-assistant/refs/heads/main/release_knowledge_base.json"
+KNOWLEDGE_BASE_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/knowledge_base.json"
 
 # --- Helper functions ---
 def find_column_by_substring(df, substring):
@@ -122,7 +122,7 @@ if uploaded_csv:
                 for index, row in process_df.iterrows():
                     processed_count += 1
                     engineering_note = row.to_dict()
-                    summary = engineering_note.get('Summary', 'N/A')
+                    summary = engineering_note.get('Summary', 'N A')
                     issue_type = engineering_note.get("Issue Type", "Feature").lower()
                     
                     progress_bar.progress(processed_count / total_rows, text=f"Processing: {summary}")
