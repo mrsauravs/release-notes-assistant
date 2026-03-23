@@ -56,7 +56,7 @@ def call_ai_provider(prompt, api_key, provider, model_name="gpt-4o", hf_model_id
     try:
         if provider == "Google Gemini":
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash') # Using stable version
+            model = genai.GenerativeModel('gemini-2.5-flash')
             response = model.generate_content(prompt)
             return response.text.strip()
             
@@ -87,9 +87,7 @@ def call_ai_provider(prompt, api_key, provider, model_name="gpt-4o", hf_model_id
 
 
 def is_public_api_update(eng_note, kb):
-    """
-    Checks if an engineering note is a public API update based on keywords and endpoint patterns.
-    """
+    """Checks if an engineering note is a public API update based on keywords and endpoint patterns."""
     api_details = kb.get("public_api_details", {})
     keywords = api_details.get("keywords", [])
     patterns = api_details.get("endpoint_patterns", [])
@@ -106,9 +104,7 @@ def is_public_api_update(eng_note, kb):
     return False
 
 def get_api_user_roles(eng_note, kb):
-    """
-    Determines the applicable user roles for a Public API ticket.
-    """
+    """Determines the applicable user roles for a Public API ticket."""
     api_details = kb.get("public_api_details", {})
     role_mapping = api_details.get("role_mapping", {})
     default_roles = api_details.get("default_user_roles", "")
@@ -120,10 +116,7 @@ def get_api_user_roles(eng_note, kb):
     return default_roles
 
 def convert_md_to_rst(md_text, release_version):
-    """
-    Converts a Markdown string to a reStructuredText string, creating cross-references
-    only for feature categories and a single top-level "Bug Fixes" section.
-    """
+    """Converts Markdown to reStructuredText, creating cross-references."""
     toc_entries = []
     
     features_section_match = re.search(r'(.*?)## Bug Fixes', md_text, re.DOTALL)
@@ -221,78 +214,105 @@ KNOWLEDGE_BASE = load_knowledge_base(kb_url) if kb_url else None
 
 with st.container(border=True):
     st.header("Step 1: Upload Your Content Files")
-    upload_cols = st.columns(4)
-    epics_csv = upload_cols[0].file_uploader("1. Epics", type="csv")
-    stories_csv = upload_cols[1].file_uploader("2. Stories", type="csv")
-    bugs_csv = upload_cols[2].file_uploader("3. Bug Fixes", type="csv")
-    escalations_csv = upload_cols[3].file_uploader("4. Support Escalations", type="csv")
+    
+    # --- [MODIFIED] Using Tabs to support both the original 4 files AND the mixed CSV ---
+    tab1, tab2 = st.tabs(["📂 Upload Separate Files", "📄 Upload Mixed CSV"])
+    
+    with tab1:
+        upload_cols = st.columns(4)
+        epics_csv = upload_cols[0].file_uploader("1. Epics", type="csv")
+        stories_csv = upload_cols[1].file_uploader("2. Stories", type="csv")
+        bugs_csv = upload_cols[2].file_uploader("3. Bug Fixes", type="csv")
+        escalations_csv = upload_cols[3].file_uploader("4. Support Escalations", type="csv")
+        
+    with tab2:
+        st.info("Upload a single Jira export containing mixed issue types. Ensure the 'Issue Type' column is present.")
+        mixed_csv = st.file_uploader("Upload Mixed Jira Issues (CSV)", type="csv")
 
-    if all([epics_csv, stories_csv, bugs_csv, escalations_csv]):
-        if st.button("1️⃣ Triage & Categorize Items", type="primary", use_container_width=True):
-            if not api_key or not KNOWLEDGE_BASE:
-                st.error("Please provide an API Key and a valid Knowledge Base URL.")
-            else:
-                all_dfs = {"Epics": pd.read_csv(epics_csv).fillna(''), "Stories": pd.read_csv(stories_csv).fillna(''), "Bugs": pd.read_csv(bugs_csv).fillna(''), "Escalations": pd.read_csv(escalations_csv).fillna('')}
-                progress_bar = st.progress(0)
-                total_rows = sum(len(df) for df in all_dfs.values())
-                processed_rows, public_items_raw = 0, []
+    # The button now checks which tab's files were provided
+    if st.button("1️⃣ Triage & Categorize Items", type="primary", use_container_width=True):
+        all_dfs = {}
+        
+        # Determine which data source to use based on what the user uploaded
+        if mixed_csv:
+            all_dfs = {"Mixed Issues": pd.read_csv(mixed_csv).fillna('')}
+        elif all([epics_csv, stories_csv, bugs_csv, escalations_csv]):
+            all_dfs = {
+                "Epics": pd.read_csv(epics_csv).fillna(''),
+                "Stories": pd.read_csv(stories_csv).fillna(''),
+                "Bugs": pd.read_csv(bugs_csv).fillna(''),
+                "Escalations": pd.read_csv(escalations_csv).fillna('')
+            }
+        else:
+            st.error("Please either upload all 4 separate files in the first tab OR a single mixed CSV in the second tab.")
+            st.stop()
+            
+        if not api_key or not KNOWLEDGE_BASE:
+            st.error("Please provide an API Key and a valid Knowledge Base URL.")
+        else:
+            progress_bar = st.progress(0)
+            total_rows = sum(len(df) for df in all_dfs.values())
+            processed_rows, public_items_raw = 0, []
 
-                for name, df in all_dfs.items():
-                    for index, row in df.iterrows():
-                        processed_rows += 1
-                        progress_bar.progress(processed_rows / total_rows, text=f"Processing {name}: {row.get('Summary', '')[:30]}...")
-                        eng_note = row.to_dict()
+            for name, df in all_dfs.items():
+                for index, row in df.iterrows():
+                    processed_rows += 1
+                    progress_bar.progress(processed_rows / total_rows, text=f"Processing {name}: {row.get('Summary', '')[:30]}...")
+                    eng_note = row.to_dict()
 
-                        # --- [MODIFIED] Added more robust outer try/except block ---
-                        try:
-                            publicity_prompt = get_prompt(KNOWLEDGE_BASE, 'classifier_publicity', summary=eng_note.get("Summary", ""), issue_type=eng_note.get("Issue Type", ""))
-                            publicity_response = call_ai_provider(publicity_prompt, api_key, ai_provider, hf_model_id=hf_model_id)
-                            
-                            if "PUBLIC" in publicity_response.upper():
-                                deployment_prompt = get_prompt(KNOWLEDGE_BASE, 'classifier_deployment', summary=eng_note.get("Summary", ""))
-                                eng_note['Deployment'] = call_ai_provider(deployment_prompt, api_key, ai_provider, hf_model_id=hf_model_id)
+                    try:
+                        publicity_prompt = get_prompt(KNOWLEDGE_BASE, 'classifier_publicity', summary=eng_note.get("Summary", ""), issue_type=eng_note.get("Issue Type", ""))
+                        publicity_response = call_ai_provider(publicity_prompt, api_key, ai_provider, hf_model_id=hf_model_id)
+                        
+                        if "PUBLIC" in publicity_response.upper():
+                            deployment_prompt = get_prompt(KNOWLEDGE_BASE, 'classifier_deployment', summary=eng_note.get("Summary", ""))
+                            eng_note['Deployment'] = call_ai_provider(deployment_prompt, api_key, ai_provider, hf_model_id=hf_model_id)
 
-                                if is_public_api_update(eng_note, KNOWLEDGE_BASE):
-                                    eng_note['Category'] = 'Public APIs'
-                                else:
-                                    categorizer_prompt = get_prompt(KNOWLEDGE_BASE, 'categorizer', company_name=KNOWLEDGE_BASE['company_name'], categories_json=json.dumps(KNOWLEDGE_BASE['product_categories'], indent=2), summary=eng_note.get("Summary", ""), description=(eng_note.get("Description", "") or "")[:300])
-                                    cat_response_text = call_ai_provider(categorizer_prompt, api_key, ai_provider, hf_model_id=hf_model_id, expect_json=(ai_provider == "OpenAI"))
-                                    
-                                    # --- [MODIFIED] Added robust check for JSON response ---
-                                    if cat_response_text:
-                                        try:
-                                            # Clean the response text in case of markdown code blocks
-                                            clean_text = re.sub(r'```json\s*|\s*```', '', cat_response_text)
-                                            cat_json = json.loads(clean_text)
-                                            eng_note['Category'] = cat_json.get('category', 'Other')
-                                        except json.JSONDecodeError:
-                                            st.warning(f"Failed to decode JSON for '{eng_note.get('Summary')}'. Assigning 'Other'. Response: '{cat_response_text}'")
-                                            eng_note['Category'] = 'Other'
-                                    else:
-                                        st.warning(f"Received empty categorization response for '{eng_note.get('Summary')}'. Assigning 'Other'.")
+                            if is_public_api_update(eng_note, KNOWLEDGE_BASE):
+                                eng_note['Category'] = 'Public APIs'
+                            else:
+                                categorizer_prompt = get_prompt(KNOWLEDGE_BASE, 'categorizer', company_name=KNOWLEDGE_BASE['company_name'], categories_json=json.dumps(KNOWLEDGE_BASE['product_categories'], indent=2), summary=eng_note.get("Summary", ""), description=(eng_note.get("Description", "") or "")[:300])
+                                cat_response_text = call_ai_provider(categorizer_prompt, api_key, ai_provider, hf_model_id=hf_model_id, expect_json=(ai_provider == "OpenAI"))
+                                
+                                if cat_response_text:
+                                    try:
+                                        clean_text = re.sub(r'```json\s*|\s*```', '', cat_response_text)
+                                        cat_json = json.loads(clean_text)
+                                        eng_note['Category'] = cat_json.get('category', 'Other')
+                                    except json.JSONDecodeError:
+                                        st.warning(f"Failed to decode JSON for '{eng_note.get('Summary')}'. Assigning 'Other'.")
                                         eng_note['Category'] = 'Other'
+                                else:
+                                    st.warning(f"Received empty categorization response for '{eng_note.get('Summary')}'. Assigning 'Other'.")
+                                    eng_note['Category'] = 'Other'
 
-                                public_items_raw.append(eng_note)
-                        except Exception as e:
-                            st.warning(f"Could not process {eng_note.get('Summary')}: {e}")
+                            public_items_raw.append(eng_note)
+                    except Exception as e:
+                        st.warning(f"Could not process {eng_note.get('Summary')}: {e}")
 
-                df_public = pd.DataFrame(public_items_raw).fillna('')
+            df_public = pd.DataFrame(public_items_raw).fillna('')
+            if not df_public.empty:
                 df_public['Include'] = True
-                public_epic_keys = set(df_public[df_public['Issue Type'] == 'Epic']['Key'])
-                df_public['Include'] = df_public.apply(lambda row: False if row['Issue Type'] == 'Story' and row.get('parent') in public_epic_keys else True, axis=1)
-                st.session_state.processed_data = df_public
-                st.success(f"Triage complete. Found {len(df_public)} potentially public items for your review.")
+                public_epic_keys = set(df_public[df_public['Issue Type'] == 'Epic']['Key']) if 'Issue Type' in df_public.columns and 'Key' in df_public.columns else set()
+                
+                if 'Issue Type' in df_public.columns and 'parent' in df_public.columns:
+                    df_public['Include'] = df_public.apply(lambda row: False if row['Issue Type'] == 'Story' and row.get('parent') in public_epic_keys else True, axis=1)
+            
+            st.session_state.processed_data = df_public
+            st.success(f"Triage complete. Found {len(df_public)} potentially public items for your review.")
 
-if st.session_state.processed_data is not None and KNOWLEDGE_BASE:
+if st.session_state.processed_data is not None and KNOWLEDGE_BASE and not st.session_state.processed_data.empty:
     with st.container(border=True):
         st.header("Step 2: Review and Approve Items")
         st.warning("Uncheck items to exclude them. You can also correct the AI-suggested Deployment and Category.")
         
+        disabled_cols = [col for col in ["Key", "Summary", "Issue Type", "parent", "Description"] if col in st.session_state.processed_data.columns]
+
         edited_df = st.data_editor(st.session_state.processed_data, column_config={
                 "Include": st.column_config.CheckboxColumn("Include?", default=True),
                 "Deployment": st.column_config.SelectboxColumn("Deployment", options=["Both", "Cloud Only", "On-Premise Only"], required=True),
                 "Category": st.column_config.SelectboxColumn("Category", options=list(KNOWLEDGE_BASE['product_categories'].keys()) + ['Other'], required=True)},
-            disabled=["Key", "Summary", "Issue Type", "parent", "Description"], height=400, use_container_width=True)
+            disabled=disabled_cols, height=400, use_container_width=True)
         
         approved_df = edited_df[edited_df['Include']]
         st.info(f"You have selected **{len(approved_df)}** items to include in the release notes.")
